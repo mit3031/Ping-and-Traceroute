@@ -104,7 +104,7 @@ def main():
         print(f"Error: Could not resolve hostname '{args.destination}'")
         return
 
-    print(f"Pinging {args.destination} [{dest_ip}] with {args.packetsize} bytes of data...")
+    print(f"Pinging {args.destination} [{dest_ip}] with {args.packetsize} bytes of data")
 
     # testing sending one packet 
     # using pid as a simple id for the packet
