@@ -7,7 +7,7 @@ import time
 
 def calculate_checksum(source_string):
     """
-    Standard checksum calculation for ICMP packets
+    Checksum calculation for ICMP packets
     """
 
     if len(source_string) % 2 != 0:
@@ -83,6 +83,52 @@ def send_one_ping(target_ip, timeout, packet_id, sequence_number, data_size):
         print(f"Error sending packet: {e}")
         return None
 
+def receive_one_ping(my_socket, packet_id, timeout):
+    """
+    Waits for the ICMP reply and calculates the round trip time
+    """
+    start_wait = time.time()
+    
+    while True:
+        # check if weve been waiting for too long
+        how_long_waiting = time.time() - start_wait
+        if how_long_waiting > timeout:
+            return None, 0
+        
+        # Listens for the packet
+        try:
+           
+            rec_packet, addr = my_socket.recvfrom(1024)
+            time_received = time.time()
+            
+            # the ICMP header starts after the 20 byte IP header
+            icmp_header = rec_packet[20:28]
+            
+            # Unpacks type, code, checksum, ID, and seequence
+            p_type, p_code, p_checksum, p_id, p_seq = struct.unpack('BBHHH', icmp_header)
+            
+            # Id has to match teh one we sent
+            if p_id == packet_id:
+                rtt = (time_received - start_wait) * 1000 # Convert to ms
+                return addr[0], rtt
+                
+        except socket.timeout:
+            return None, 0
+
+def do_ping(dest_ip, timeout, packet_size, sequence_number):
+    """
+    Sends one ping and waits for the result
+    """
+    packet_id = 12345 
+    
+    sock = send_one_ping(dest_ip, timeout, packet_id, sequence_number, packet_size)
+    if sock is None:
+        return None, 0
+    
+    addr, rtt = receive_one_ping(sock, packet_id, timeout)
+    sock.close()
+    return addr, rtt
+
 def main():
     parser = argparse.ArgumentParser(description="Custom Python Ping Tool")
     
@@ -106,14 +152,37 @@ def main():
 
     print(f"Pinging {args.destination} [{dest_ip}] with {args.packetsize} bytes of data")
 
-    # testing sending one packet 
-    # using pid as a simple id for the packet
-    my_id = 12345 
-    sock = send_one_ping(dest_ip, args.timeout, my_id, 1, args.packetsize)
+    # deafult timeout
+    if args.timeout is None:
+        args.timeout = 2.0
+
+    count = 0
+    my_id = 12345 # using a simple id for the packet
     
-    if sock:
-        print("Da packet was sent")
-        sock.close()
+    try:
+        while True:
+            # if the user set a count, check if we reached it
+            if args.count is not None and count >= args.count:
+                break
+            
+            count = count + 1
+            
+            # call our sending and receiving logic
+            addr, rtt = do_ping(dest_ip, args.timeout, args.packetsize, count)
+            
+            if addr:
+     
+                print(f"{args.packetsize + 8} bytes from {addr}: icmp_seq = {count} time = {rtt:.2f} ms")
+            else:
+                print("Request timed out")
+
+            # we would wait until the next one, unless its the last one
+            if args.count is None or count < args.count:
+                time.sleep(args.wait)
+
+    except KeyboardInterrupt:
+        print("\n --- ping statistics ----")
+        print(f"stopped after {count} packets")
 
 if __name__ == "__main__":
     main()
