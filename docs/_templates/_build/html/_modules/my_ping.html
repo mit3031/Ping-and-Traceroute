@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>my_ping &#8212; Ping and Traceroute 1.0 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="../_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="../_static/alabaster.css?v=27fed22d" />
+    <script src="../_static/documentation_options.js?v=f2a433a1"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for my_ping</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">socket</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">struct</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+
+<div class="viewcode-block" id="calculate_checksum">
+<a class="viewcode-back" href="../my_ping.html#my_ping.calculate_checksum">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">calculate_checksum</span><span class="p">(</span><span class="n">source_string</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Checksum calculation for ICMP packets</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_string</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">source_string</span> <span class="o">+=</span> <span class="sa">b</span><span class="s1">&#39;</span><span class="se">\x00</span><span class="s1">&#39;</span>
+    
+    <span class="n">total_sum</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+    
+    <span class="k">while</span> <span class="n">count</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_string</span><span class="p">):</span>
+        <span class="n">left_byte</span> <span class="o">=</span> <span class="n">source_string</span><span class="p">[</span><span class="n">count</span><span class="p">]</span>
+        <span class="n">right_byte</span> <span class="o">=</span> <span class="n">source_string</span><span class="p">[</span><span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+        
+        <span class="c1"># shifts the first byte and add the second</span>
+        <span class="n">combined_val</span> <span class="o">=</span> <span class="p">(</span><span class="n">left_byte</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="n">right_byte</span>
+        <span class="n">total_sum</span> <span class="o">=</span> <span class="n">total_sum</span> <span class="o">+</span> <span class="n">combined_val</span>
+        <span class="n">count</span> <span class="o">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">2</span>
+
+    <span class="k">while</span> <span class="p">(</span><span class="n">total_sum</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">total_sum</span> <span class="o">=</span> <span class="p">(</span><span class="n">total_sum</span> <span class="o">&amp;</span> <span class="mh">0xFFFF</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">total_sum</span> <span class="o">&gt;&gt;</span> <span class="mi">16</span><span class="p">)</span>
+
+    <span class="n">answer</span> <span class="o">=</span> <span class="o">~</span><span class="n">total_sum</span>
+    <span class="n">answer</span> <span class="o">=</span> <span class="n">answer</span> <span class="o">&amp;</span> <span class="mh">0xFFFF</span>
+    
+    <span class="c1"># returns in network byte order</span>
+    <span class="k">return</span> <span class="n">socket</span><span class="o">.</span><span class="n">htons</span><span class="p">(</span><span class="n">answer</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="create_packet">
+<a class="viewcode-back" href="../my_ping.html#my_ping.create_packet">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">create_packet</span><span class="p">(</span><span class="n">id_number</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">,</span> <span class="n">data_size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Packs the ICMP header and data into a binary format</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">icmp_type</span> <span class="o">=</span> <span class="mi">8</span> 
+    <span class="n">icmp_code</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">icmp_checksum</span> <span class="o">=</span> <span class="mi">0</span>
+    
+    <span class="c1"># BBHHH = Byte, Byte, Half word, Half word, Half fword</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s1">&#39;BBHHH&#39;</span><span class="p">,</span> <span class="n">icmp_type</span><span class="p">,</span> <span class="n">icmp_code</span><span class="p">,</span> <span class="n">icmp_checksum</span><span class="p">,</span> <span class="n">id_number</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">)</span>
+    
+    <span class="c1"># Fill payload with &quot;a&quot; characters to match the requested size</span>
+    <span class="n">payload</span> <span class="o">=</span> <span class="sa">b</span><span class="s1">&#39;a&#39;</span> <span class="o">*</span> <span class="n">data_size</span>
+    
+    <span class="c1"># calculates the checksum on header plus payload</span>
+    <span class="n">icmp_checksum</span> <span class="o">=</span> <span class="n">calculate_checksum</span><span class="p">(</span><span class="n">header</span> <span class="o">+</span> <span class="n">payload</span><span class="p">)</span>
+    
+    <span class="c1"># repacking the header with the real checksum</span>
+    <span class="n">header</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s1">&#39;BBHHH&#39;</span><span class="p">,</span> <span class="n">icmp_type</span><span class="p">,</span> <span class="n">icmp_code</span><span class="p">,</span> <span class="n">icmp_checksum</span><span class="p">,</span> <span class="n">id_number</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">)</span>
+    
+    <span class="k">return</span> <span class="n">header</span> <span class="o">+</span> <span class="n">payload</span></div>
+
+
+<div class="viewcode-block" id="send_one_ping">
+<a class="viewcode-back" href="../my_ping.html#my_ping.send_one_ping">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">send_one_ping</span><span class="p">(</span><span class="n">target_ip</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">packet_id</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">,</span> <span class="n">data_size</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Creates a raw socket and sends one ICMP packet</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># creates raw socket</span>
+        <span class="n">my_socket</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_RAW</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">IPPROTO_ICMP</span><span class="p">)</span>
+        
+        <span class="c1">#sets how long the socket should wait for a response later</span>
+        <span class="n">my_socket</span><span class="o">.</span><span class="n">settimeout</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+        
+        <span class="c1">#creates the binary packet</span>
+        <span class="n">packet</span> <span class="o">=</span> <span class="n">create_packet</span><span class="p">(</span><span class="n">packet_id</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">,</span> <span class="n">data_size</span><span class="p">)</span>
+        
+        <span class="n">my_socket</span><span class="o">.</span><span class="n">sendto</span><span class="p">(</span><span class="n">packet</span><span class="p">,</span> <span class="p">(</span><span class="n">target_ip</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+        
+        <span class="k">return</span> <span class="n">my_socket</span>
+        
+    <span class="k">except</span> <span class="ne">PermissionError</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Error: You must run this as Administrator to use raw sockets&quot;</span><span class="p">)</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error sending packet: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="receive_one_ping">
+<a class="viewcode-back" href="../my_ping.html#my_ping.receive_one_ping">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">receive_one_ping</span><span class="p">(</span><span class="n">my_socket</span><span class="p">,</span> <span class="n">packet_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Waits for the ICMP reply and calculates the round trip time</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">start_wait</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="c1"># check if weve been waiting for too long</span>
+        <span class="n">how_long_waiting</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_wait</span>
+        <span class="k">if</span> <span class="n">how_long_waiting</span> <span class="o">&gt;</span> <span class="n">timeout</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">0</span>
+        
+        <span class="c1"># Listens for the packet</span>
+        <span class="k">try</span><span class="p">:</span>
+           
+            <span class="n">rec_packet</span><span class="p">,</span> <span class="n">addr</span> <span class="o">=</span> <span class="n">my_socket</span><span class="o">.</span><span class="n">recvfrom</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span>
+            <span class="n">time_received</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+            
+            <span class="c1"># the ICMP header starts after the 20 byte IP header</span>
+            <span class="n">icmp_header</span> <span class="o">=</span> <span class="n">rec_packet</span><span class="p">[</span><span class="mi">20</span><span class="p">:</span><span class="mi">28</span><span class="p">]</span>
+            
+            <span class="c1"># Unpacks type, code, checksum, ID, and seequence</span>
+            <span class="n">p_type</span><span class="p">,</span> <span class="n">p_code</span><span class="p">,</span> <span class="n">p_checksum</span><span class="p">,</span> <span class="n">p_id</span><span class="p">,</span> <span class="n">p_seq</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack</span><span class="p">(</span><span class="s1">&#39;BBHHH&#39;</span><span class="p">,</span> <span class="n">icmp_header</span><span class="p">)</span>
+            
+            <span class="c1"># Id has to match teh one we sent</span>
+            <span class="k">if</span> <span class="n">p_id</span> <span class="o">==</span> <span class="n">packet_id</span><span class="p">:</span>
+                <span class="n">rtt</span> <span class="o">=</span> <span class="p">(</span><span class="n">time_received</span> <span class="o">-</span> <span class="n">start_wait</span><span class="p">)</span> <span class="o">*</span> <span class="mi">1000</span> <span class="c1"># Convert to ms</span>
+                <span class="k">return</span> <span class="n">addr</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">rtt</span>
+                
+        <span class="k">except</span> <span class="n">socket</span><span class="o">.</span><span class="n">timeout</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">0</span></div>
+
+
+<div class="viewcode-block" id="do_ping">
+<a class="viewcode-back" href="../my_ping.html#my_ping.do_ping">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">do_ping</span><span class="p">(</span><span class="n">dest_ip</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">packet_size</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sends one ping and waits for the result</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">packet_id</span> <span class="o">=</span> <span class="mi">12345</span> 
+    
+    <span class="n">sock</span> <span class="o">=</span> <span class="n">send_one_ping</span><span class="p">(</span><span class="n">dest_ip</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">packet_id</span><span class="p">,</span> <span class="n">sequence_number</span><span class="p">,</span> <span class="n">packet_size</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">sock</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="mi">0</span>
+    
+    <span class="n">addr</span><span class="p">,</span> <span class="n">rtt</span> <span class="o">=</span> <span class="n">receive_one_ping</span><span class="p">(</span><span class="n">sock</span><span class="p">,</span> <span class="n">packet_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+    <span class="n">sock</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">addr</span><span class="p">,</span> <span class="n">rtt</span></div>
+
+
+<div class="viewcode-block" id="main">
+<a class="viewcode-back" href="../my_ping.html#my_ping.main">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">():</span>
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;Custom Python Ping Tool&quot;</span><span class="p">)</span>
+    
+    <span class="c1">#The arguments</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;destination&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;The hostname or IP to ping&quot;</span><span class="p">)</span>
+    
+    <span class="c1"># The flags</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-c&quot;</span><span class="p">,</span> <span class="s2">&quot;--count&quot;</span><span class="p">,</span> <span class="nb">type</span> <span class="o">=</span> <span class="nb">int</span><span class="p">,</span> <span class="n">help</span> <span class="o">=</span> <span class="s2">&quot;Stop after sending count packets&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-i&quot;</span><span class="p">,</span> <span class="s2">&quot;--wait&quot;</span><span class="p">,</span> <span class="nb">type</span> <span class="o">=</span> <span class="nb">float</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">help</span> <span class="o">=</span> <span class="s2">&quot;Wait seconds between packets&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-s&quot;</span><span class="p">,</span> <span class="s2">&quot;--packetsize&quot;</span><span class="p">,</span> <span class="nb">type</span> <span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span> <span class="o">=</span> <span class="mi">56</span><span class="p">,</span> <span class="n">help</span> <span class="o">=</span> <span class="s2">&quot;Number of data bytes to send&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-t&quot;</span><span class="p">,</span> <span class="s2">&quot;--timeout&quot;</span><span class="p">,</span> <span class="nb">type</span> <span class="o">=</span> <span class="nb">float</span><span class="p">,</span> <span class="n">help</span> <span class="o">=</span> <span class="s2">&quot;Timeout in seconds before exiting&quot;</span><span class="p">)</span>
+
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+
+    <span class="c1"># turns hostname into an ip address</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">dest_ip</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">gethostbyname</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">destination</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">socket</span><span class="o">.</span><span class="n">gaierror</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error: Could not resolve hostname &#39;</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">destination</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Pinging </span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">destination</span><span class="si">}</span><span class="s2"> [</span><span class="si">{</span><span class="n">dest_ip</span><span class="si">}</span><span class="s2">] with </span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">packetsize</span><span class="si">}</span><span class="s2"> bytes of data&quot;</span><span class="p">)</span>
+
+    <span class="c1"># deafult timeout</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">timeout</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">args</span><span class="o">.</span><span class="n">timeout</span> <span class="o">=</span> <span class="mf">2.0</span>
+
+    <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">my_id</span> <span class="o">=</span> <span class="mi">12345</span> <span class="c1"># using a simple id for the packet</span>
+    
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+            <span class="c1"># if the user set a count, check if we reached it</span>
+            <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">count</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">count</span> <span class="o">&gt;=</span> <span class="n">args</span><span class="o">.</span><span class="n">count</span><span class="p">:</span>
+                <span class="k">break</span>
+            
+            <span class="n">count</span> <span class="o">=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span>
+            
+            <span class="c1"># call our sending and receiving logic</span>
+            <span class="n">addr</span><span class="p">,</span> <span class="n">rtt</span> <span class="o">=</span> <span class="n">do_ping</span><span class="p">(</span><span class="n">dest_ip</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">timeout</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">packetsize</span><span class="p">,</span> <span class="n">count</span><span class="p">)</span>
+            
+            <span class="k">if</span> <span class="n">addr</span><span class="p">:</span>
+     
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">packetsize</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">8</span><span class="si">}</span><span class="s2"> bytes from </span><span class="si">{</span><span class="n">addr</span><span class="si">}</span><span class="s2">: icmp_seq = </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> time = </span><span class="si">{</span><span class="n">rtt</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Request timed out&quot;</span><span class="p">)</span>
+
+            <span class="c1"># we would wait until the next one, unless its the last one</span>
+            <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">count</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">count</span> <span class="o">&lt;</span> <span class="n">args</span><span class="o">.</span><span class="n">count</span><span class="p">:</span>
+                <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">wait</span><span class="p">)</span>
+
+    <span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2"> --- ping statistics ----&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;stopped after </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> packets&quot;</span><span class="p">)</span></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../index.html">Ping and Traceroute</a></h1>
+
+
+
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Navigation</h3>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, Marvynn Talusan.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 9.1.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>
